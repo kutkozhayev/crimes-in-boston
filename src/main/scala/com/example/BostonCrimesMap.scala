@@ -16,12 +16,17 @@ object BostonCrimesMap extends App {
   offenseCodes.createOrReplaceTempView("offenseCodesTable")
   var loop = new Breaks;
 
+  //--------------------------CRIMES TOTAL------------------------------
 
-  val crimesTotal = crimeFacts.select("DISTRICT").groupBy("DISTRICT").count() // CRIMES TOTAL
+  val crimesTotal = crimeFacts.select($"DISTRICT").groupBy($"DISTRICT").count()
   crimesTotal.repartition(1).write.parquet(args(2) + "\\crimes_total.parquet")
 
-  val crimesMonthly = spark.sql("SELECT DISTRICT, MONTH, percentile_approx(MEDIAN, 0.5) AS MEDIAN FROM (select DISTRICT, MONTH, count(MONTH) AS MEDIAN FROM crimeFactsTable group by DISTRICT, MONTH) GROUP BY DISTRICT, MONTH")
+  //---------------------------CRIMES MONTHLY---------------------------
+
+  val crimesMonthly = spark.sql("select DISTRICT, percentile_approx(MEDIAN, 0.5) as MONTH_MEDIAN_CRIMES FROM (select DISTRICT, MONTH, count(1) as MEDIAN FROM crimeFactsTable group by DISTRICT, MONTH) GROUP BY DISTRICT")
   crimesMonthly.repartition(1).write.parquet(args(2) + "\\crimes_monthly.parquet")
+
+  //---------------------------FREQUENT CRIME TYPES----------------------
 
   val splitBySeparator = (crimeType: String) => {
     var result = ""
@@ -40,31 +45,15 @@ object BostonCrimesMap extends App {
   val frequentCrimeTypes = offenseCodesBroadcast.join(crimeFacts, $"CODE" === $"OFFENSE_CODE").groupBy($"DISTRICT",$"NAME").count().orderBy($"count".desc)
   frequentCrimeTypes.repartition(1).write.parquet(args(2) + "\\frequent_crime_types.parquet")
 
+  //-------------------------------LAT------------------------------------
+
   crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Lat")/count($"Lat")).as("avgLat"))
     .repartition(1).write.parquet(args(2) + "\\lat.parquet")
 
+  //-------------------------------LONG-----------------------------------
+
   crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Long")/count($"Long")).as("avgLong"))
     .repartition(1).write.parquet(args(2) + "\\lng.parquet")
-
-
-   /*crimeTotal.repartition(1)
-    .write.format("com.databricks.spark.csv")
-    .option("header", "true")
-    .save("mydata.csv")*/
-
-
-
-
-
-  //crime.select($"DISTRICT").groupBy($"DISTRICT").sum("Lat").show()
-
-  //crime.join(crimeType, $"CODE" === $"OFFENSE_CODE")
-  //crime.select("MONTH").groupBy("MONTH").count().show()
-
-  //spark.sql("select DISTRICT, sum(Lat)/count(Lat) as AvgLat from BostonTable group by DISTRICT").show()
-  //spark.sql("select DISTRICT, sum(Long)/count(Long) as AvgLong from BostonTable group by DISTRICT").show()
-
-
 }
