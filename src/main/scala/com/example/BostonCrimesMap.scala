@@ -2,8 +2,9 @@ package com.example
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
-import scala.util.control.Breaks
 import org.apache.spark.sql.functions.broadcast
+import scala.collection.immutable.ListMap
+import scala.collection.mutable.HashMap
 
 
 object BostonCrimesMap extends App {
@@ -14,46 +15,46 @@ object BostonCrimesMap extends App {
   val offenseCodes = spark.read.format("csv").option("header","true").load(args(1))
   crimeFacts.createOrReplaceTempView("crimeFactsTable")
   offenseCodes.createOrReplaceTempView("offenseCodesTable")
-  var loop = new Breaks;
 
   //--------------------------CRIMES TOTAL------------------------------
 
   val crimesTotal = crimeFacts.select($"DISTRICT").groupBy($"DISTRICT").count()
-  crimesTotal.repartition(1).write.parquet(args(2) + "\\crimes_total.parquet")
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
 
   //---------------------------CRIMES MONTHLY---------------------------
 
-  val crimesMonthly = spark.sql("select DISTRICT, percentile_approx(MEDIAN, 0.5) as MONTH_MEDIAN_CRIMES FROM (select DISTRICT, MONTH, count(1) as MEDIAN FROM crimeFactsTable group by DISTRICT, MONTH) GROUP BY DISTRICT")
-  crimesMonthly.repartition(1).write.parquet(args(2) + "\\crimes_monthly.parquet")
+  val crimesMonthly = spark.sql("select DISTRICT, MONTH, percentile_approx(count(1),0.5) OVER (PARTITION BY DISTRICT) as MONTH_MEDIAN_CRIMES FROM crimeFactsTable group by DISTRICT, MONTH")
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
 
   //---------------------------FREQUENT CRIME TYPES----------------------
 
-  val splitBySeparator = (crimeType: String) => {
-    var result = ""
-    loop.breakable {
-      for (letter <- crimeType.split("")) {
-        if (!(letter == "-")) {
-          result += letter
-        } else loop.break
-      }
+  val getThreeMostCrimeTypes = udf((crimeTypes: String) => {
+
+    val quantityOfCrimes = HashMap[String,Int]()
+    for (item <- crimeTypes.split(",")) {
+      if (quantityOfCrimes.contains(item)) quantityOfCrimes.put(item, quantityOfCrimes(item) + 1)
+      else quantityOfCrimes.put(item, 1)
     }
-    result.trim
-  }
-  spark.udf.register("splitBySeparator", splitBySeparator)
-  val crimeTypeCode = spark.sql("select CODE, splitBySeparator(NAME) as NAME from offenseCodesTable")
+    val quantityCrimesSortedByDescOrder = ListMap(quantityOfCrimes.toSeq.sortWith(_._2 > _._2):_*)
+    quantityCrimesSortedByDescOrder.take(3).keys.mkString(", ")
+
+  })
+  spark.udf.register("getThreeMostCrimeTypes", getThreeMostCrimeTypes)
+  val crimeTypeCode = offenseCodes.select($"CODE", split($"NAME","-").getItem(0) as "NAME")
   val offenseCodesBroadcast = broadcast(crimeTypeCode)
-  val frequentCrimeTypes = offenseCodesBroadcast.join(crimeFacts, $"CODE" === $"OFFENSE_CODE").groupBy($"DISTRICT",$"NAME").count().orderBy($"count".desc)
-  frequentCrimeTypes.repartition(1).write.parquet(args(2) + "\\frequent_crime_types.parquet")
+  val frequentCrimeTypes = offenseCodesBroadcast.join(crimeFacts, $"CODE" === $"OFFENSE_CODE")
+    .groupBy($"DISTRICT").agg(getThreeMostCrimeTypes(concat_ws(",",collect_list($"NAME"))).alias("FrequentCrimeTypes"))
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
 
   //-------------------------------LAT------------------------------------
 
   crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Lat")/count($"Lat")).as("avgLat"))
-    .repartition(1).write.parquet(args(2) + "\\lat.parquet")
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
 
   //-------------------------------LONG-----------------------------------
 
   crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Long")/count($"Long")).as("avgLong"))
-    .repartition(1).write.parquet(args(2) + "\\lng.parquet")
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
 }
