@@ -1,8 +1,11 @@
 package com.example
 
+import java.io.File
+
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.broadcast
+
 import scala.collection.immutable.ListMap
 import scala.collection.mutable.HashMap
 
@@ -18,13 +21,13 @@ object BostonCrimesMap extends App {
 
   //--------------------------CRIMES TOTAL------------------------------
 
-  val crimesTotal = crimeFacts.select($"DISTRICT").groupBy($"DISTRICT").count()
-    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
+  val crimesTotal = crimeFacts.groupBy($"DISTRICT").count()
+  .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 
   //---------------------------CRIMES MONTHLY---------------------------
 
-  val crimesMonthly = spark.sql("select DISTRICT, MONTH, percentile_approx(count(1),0.5) OVER (PARTITION BY DISTRICT) as MONTH_MEDIAN_CRIMES FROM crimeFactsTable group by DISTRICT, MONTH")
-    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
+  val crimesMonthly = spark.sql("select DISTRICT, YEAR, MONTH, percentile_approx(count(1),0.5) OVER (PARTITION BY DISTRICT) as MONTH_MEDIAN_CRIMES FROM crimeFactsTable group by DISTRICT, MONTH, YEAR order by DISTRICT, YEAR, MONTH")
+  .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 
   //---------------------------FREQUENT CRIME TYPES----------------------
 
@@ -44,17 +47,17 @@ object BostonCrimesMap extends App {
   val offenseCodesBroadcast = broadcast(crimeTypeCode)
   val frequentCrimeTypes = offenseCodesBroadcast.join(crimeFacts, $"CODE" === $"OFFENSE_CODE")
     .groupBy($"DISTRICT").agg(getThreeMostCrimeTypes(concat_ws(",",collect_list($"NAME"))).alias("FrequentCrimeTypes"))
-    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 
   //-------------------------------LAT------------------------------------
 
   crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Lat")/count($"Lat")).as("avgLat"))
-    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 
   //-------------------------------LONG-----------------------------------
 
   crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Long")/count($"Long")).as("avgLong"))
-    .coalesce(1).write.format("parquet").mode("append").save(args(2) + "\\crimes_in_boston.parquet")
+    .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 }
