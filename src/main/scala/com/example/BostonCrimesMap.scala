@@ -3,6 +3,7 @@ package com.example
 import java.io.File
 
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.broadcast
 
@@ -29,22 +30,12 @@ object BostonCrimesMap extends App {
 
   //---------------------------FREQUENT CRIME TYPES----------------------
 
-  val getThreeMostCrimeTypes = udf((crimeTypes: String) => {
-
-    val quantityOfCrimes = HashMap[String,Int]()
-    for (item <- crimeTypes.split(",")) {
-      if (quantityOfCrimes.contains(item)) quantityOfCrimes.put(item, quantityOfCrimes(item) + 1)
-      else quantityOfCrimes.put(item, 1)
-    }
-    val quantityCrimesSortedByDescOrder = ListMap(quantityOfCrimes.toSeq.sortWith(_._2 > _._2):_*)
-    quantityCrimesSortedByDescOrder.take(3).keys.mkString(", ")
-
-  })
-  spark.udf.register("getThreeMostCrimeTypes", getThreeMostCrimeTypes)
   val crimeTypeCode = offenseCodes.select($"CODE", split($"NAME","-").getItem(0) as "NAME")
   val offenseCodesBroadcast = broadcast(crimeTypeCode)
   val frequentCrimeTypes = offenseCodesBroadcast.join(crimeFacts, $"CODE" === $"OFFENSE_CODE")
-    .groupBy($"DISTRICT").agg(getThreeMostCrimeTypes(concat_ws(",",collect_list($"NAME"))).alias("FrequentCrimeTypes"))
+    .groupBy($"DISTRICT", $"NAME").agg(count($"NAME").as("CRIMENUMBER"))
+    .withColumn("RANK", row_number().over(Window.partitionBy($"DISTRICT").orderBy($"CRIMENUMBER".desc))).where($"RANK" < 4)
+    .groupBy($"DISTRICT").agg(concat_ws(", ", collect_list($"NAME")).as("FrequentCrimeTypes"))
 
   //-------------------------------LAT------------------------------------
 
