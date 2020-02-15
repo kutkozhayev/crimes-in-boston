@@ -21,13 +21,11 @@ object BostonCrimesMap extends App {
 
   //--------------------------CRIMES TOTAL------------------------------
 
-  val crimesTotal = crimeFacts.groupBy($"DISTRICT").count()
-  .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
+  val crimesTotal = crimeFacts.groupBy($"DISTRICT").agg(count($"DISTRICT").as("totalCrimeCounts"))
 
   //---------------------------CRIMES MONTHLY---------------------------
 
   val crimesMonthly = spark.sql("select DISTRICT, YEAR, MONTH, percentile_approx(count(1),0.5) OVER (PARTITION BY DISTRICT) as MONTH_MEDIAN_CRIMES FROM crimeFactsTable group by DISTRICT, MONTH, YEAR order by DISTRICT, YEAR, MONTH")
-  .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 
   //---------------------------FREQUENT CRIME TYPES----------------------
 
@@ -47,17 +45,23 @@ object BostonCrimesMap extends App {
   val offenseCodesBroadcast = broadcast(crimeTypeCode)
   val frequentCrimeTypes = offenseCodesBroadcast.join(crimeFacts, $"CODE" === $"OFFENSE_CODE")
     .groupBy($"DISTRICT").agg(getThreeMostCrimeTypes(concat_ws(",",collect_list($"NAME"))).alias("FrequentCrimeTypes"))
-    .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 
   //-------------------------------LAT------------------------------------
 
-  crimeFacts.groupBy($"DISTRICT")
+  val avgLat = crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Lat")/count($"Lat")).as("avgLat"))
-    .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 
   //-------------------------------LONG-----------------------------------
 
-  crimeFacts.groupBy($"DISTRICT")
+  val avgLong = crimeFacts.groupBy($"DISTRICT")
     .agg((sum($"Long")/count($"Long")).as("avgLong"))
+
+
+  crimesTotal.join(crimesMonthly, "DISTRICT")
+    .join(frequentCrimeTypes, "DISTRICT")
+    .join(avgLat, "DISTRICT")
+    .join(avgLong, "DISTRICT")
     .coalesce(1).write.format("parquet").mode("append").save(args(2) + File.separator + "Boston crime analytics")
 }
+
+
